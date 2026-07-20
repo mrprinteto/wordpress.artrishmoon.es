@@ -26,11 +26,20 @@ wordpress-stack/
 ├── docker-compose.yml
 ├── .env.example
 ├── nginx/
+│   ├── entrypoint.sh
 │   └── templates/
 │       └── default.conf.template
 └── certbot/
     └── entrypoint.sh
 ```
+
+Both `entrypoint.sh` scripts must be executable on the host before starting the stack:
+
+```
+chmod +x nginx/entrypoint.sh certbot/entrypoint.sh
+```
+
+If this step is skipped, or if a file transfer to the VPS drops the execute bit, the affected container fails to start (`permission denied` in its logs). If a transfer instead drops the file entirely, Docker silently creates an empty directory at that path instead of failing, which produces a restart loop with no log output at all; if that happens, delete the empty directory and recreate the file.
 
 ## How to configure
 
@@ -80,6 +89,7 @@ wordpress-stack/
 - **`403 Forbidden` from the Cloudflare API**: the token lacks `Zone:DNS:Edit` permission, or it is scoped to the wrong zone. Regenerate the token with the correct scope.
 - **`too many certificates already issued`**: Let's Encrypt's rate limit for duplicate certificates was reached (five identical certificates per domain set per week). Wait for the limit to reset, or add `--staging` to the `certbot certonly` command in `certbot/entrypoint.sh` while testing, then remove it for the real certificate.
 - **Nginx stuck on "Waiting for SSL certificate..."**: check `docker compose logs certbot` for the underlying error. Because the script uses `set -e`, a failed `certonly` call stops the container, and `restart: unless-stopped` restarts it to retry. Nginx remains in its wait loop until issuance succeeds.
+- **certbot or nginx restarts continuously with empty logs**: check the exit reason with `docker inspect <container> --format '{{.State.ExitCode}} {{.State.Error}}'`. This usually means one of two things: the entrypoint script lost its execute permission during a file transfer (`chmod +x nginx/entrypoint.sh certbot/entrypoint.sh` fixes this), or the script file is missing entirely and Docker created an empty directory in its place at that path (delete the empty directory, recreate the file, then `docker compose up -d --force-recreate <service>`).
 
 ### Cloudflare IP ranges change over time
 
@@ -88,6 +98,16 @@ The `default.conf.template` file lists Cloudflare's IP ranges under `set_real_ip
 ### 502 Bad Gateway
 
 Usually means the `wordpress` container is not ready or has crashed. Check `docker compose logs wordpress`.
+
+### Nginx serves the stock welcome page instead of WordPress
+
+Compare the rendered configuration against the template:
+
+```
+docker compose exec nginx cat /etc/nginx/conf.d/default.conf
+```
+
+If it shows the generic nginx welcome page config rather than the WordPress server blocks, the template was never rendered. Confirm `nginx/entrypoint.sh` calls `envsubst` before starting nginx, and that `nginx/templates/default.conf.template` exists on the VPS with real content, not an empty directory (see the empty-directory failure mode above).
 
 ### 525 or 526 errors shown by Cloudflare
 

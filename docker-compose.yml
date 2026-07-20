@@ -66,20 +66,15 @@ services:
       - certbot
     environment:
       DOMAIN: ${DOMAIN}
-      # Restrict envsubst templating to the DOMAIN variable only, so nginx's
-      # own runtime variables (host, uri, remote_addr, etc.) are left intact.
-      NGINX_ENVSUBST_FILTER: ^DOMAIN$$
     ports:
       - "80:80"
       - "443:443"
+    entrypoint: /bin/sh /entrypoint.sh
     volumes:
+      - ./nginx/entrypoint.sh:/entrypoint.sh:ro
       - ./nginx/templates:/etc/nginx/templates:ro
       - wordpress_data:/var/www/html:ro
       - certbot_conf:/etc/letsencrypt:ro
-    # nginx must not start with an ssl_certificate directive pointing to a
-    # file that does not exist yet, so it waits for the first certificate.
-    command: >
-      sh -c "until [ -f /etc/letsencrypt/live/${DOMAIN}/fullchain.pem ]; do echo 'Waiting for SSL certificate...'; sleep 5; done; nginx -g 'daemon off;'"
     networks:
       - frontend
 
