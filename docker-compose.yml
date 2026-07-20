@@ -1,0 +1,94 @@
+services:
+  db:
+    image: mariadb:11.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - db_data:/var/lib/mysql
+    networks:
+      - backend
+
+  wordpress:
+    image: wordpress:php8.3-fpm-alpine
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      WORDPRESS_DB_HOST: db
+      WORDPRESS_DB_NAME: ${MYSQL_DATABASE}
+      WORDPRESS_DB_USER: ${MYSQL_USER}
+      WORDPRESS_DB_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - wordpress_data:/var/www/html
+    networks:
+      - backend
+      - frontend
+
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin:latest
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      PMA_HOST: db
+      PMA_ABSOLUTE_URI: https://${DOMAIN}/phpmyadmin/
+    networks:
+      - backend
+      - frontend
+
+  # DNS-01 challenge via the Cloudflare API. This is required because the
+  # domain is proxied (orange cloud): an HTTP-01 challenge could be blocked
+  # or redirected at Cloudflare's edge before it reaches this server.
+  certbot:
+    image: certbot/dns-cloudflare:latest
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN}
+      EMAIL: ${EMAIL}
+      CF_API_TOKEN: ${CF_API_TOKEN}
+    entrypoint: /bin/sh /entrypoint.sh
+    volumes:
+      - certbot_conf:/etc/letsencrypt
+      - certbot_logs:/var/log/letsencrypt
+      - ./certbot/entrypoint.sh:/entrypoint.sh:ro
+    networks:
+      - frontend
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      - wordpress
+      - certbot
+    environment:
+      DOMAIN: ${DOMAIN}
+      # Restrict envsubst templating to the DOMAIN variable only, so nginx's
+      # own runtime variables (host, uri, remote_addr, etc.) are left intact.
+      NGINX_ENVSUBST_FILTER: ^DOMAIN$$
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/templates:/etc/nginx/templates:ro
+      - wordpress_data:/var/www/html:ro
+      - certbot_conf:/etc/letsencrypt:ro
+    # nginx must not start with an ssl_certificate directive pointing to a
+    # file that does not exist yet, so it waits for the first certificate.
+    command: >
+      sh -c "until [ -f /etc/letsencrypt/live/${DOMAIN}/fullchain.pem ]; do echo 'Waiting for SSL certificate...'; sleep 5; done; nginx -g 'daemon off;'"
+    networks:
+      - frontend
+
+networks:
+  frontend:
+  backend:
+
+volumes:
+  db_data:
+  wordpress_data:
+  certbot_conf:
+  certbot_logs:
